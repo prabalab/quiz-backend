@@ -1,29 +1,45 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
-require("./db");
-
-const Question = require("./models/Question");
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
+// 🔗 MongoDB connection
+mongoose.connect(process.env.MONGO_URI)
+  .then(() => console.log("✅ MongoDB connected"))
+  .catch(err => console.error("❌ MongoDB error:", err));
+
+// 🧠 Question schema
+const questionSchema = new mongoose.Schema({
+  questionText: String,
+  answers: [
+    {
+      text: String,
+      score: Number,
+    },
+  ],
+});
+
+const Question = mongoose.model("Question", questionSchema);
+
+// ✅ ROOT ROUTE (optional, but good)
 app.get("/", (req, res) => {
-  res.send("Quiz API is running 🚀");
+  res.send("Quiz Backend is running 🚀");
 });
 
+// ✅ THIS IS THE MISSING PART 👇👇👇
 app.get("/questions", async (req, res) => {
-  const questions = await Question.find();
-  res.json(questions);
+  try {
+    const questions = await Question.find();
+    res.json(questions);
+  } catch (error) {
+    res.status(500).json({ message: "Server error" });
+  }
 });
 
-app.post("/questions", async (req, res) => {
-  const question = new Question(req.body);
-  await question.save();
-  res.json({ message: "Question added" });
-});
-
+// 🔊 PORT (Render requires this)
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);

@@ -47,11 +47,22 @@ app.post("/questions", async (req, res) => {
   try {
     const { questionText, answers } = req.body;
 
-    // 🔍 Basic validation
-    if (!questionText || !answers || answers.length === 0) {
+    if (!questionText || !Array.isArray(answers) || answers.length === 0) {
       return res.status(400).json({
         message: "Question and answers are required",
       });
+    }
+
+    // 🔍 Validate each answer
+    for (const ans of answers) {
+      if (
+        typeof ans.text !== "string" ||
+        typeof ans.score !== "number"
+      ) {
+        return res.status(400).json({
+          message: "Each answer must have text (string) and score (number)",
+        });
+      }
     }
 
     const question = new Question({
@@ -71,6 +82,7 @@ app.post("/questions", async (req, res) => {
     });
   }
 });
+
 
 // 🔊 PORT (Render requires this)
 const PORT = process.env.PORT || 3000;

@@ -13,29 +13,62 @@ mongoose.connect(process.env.MONGO_URI)
 
 // 🧠 Question schema
 const questionSchema = new mongoose.Schema({
-  questionText: String,
+  questionText: {
+    type: String,
+    required: true,
+  },
   answers: [
     {
-      text: String,
-      score: Number,
+      text: { type: String, required: true },
+      score: { type: Number, required: true },
     },
   ],
 });
 
 const Question = mongoose.model("Question", questionSchema);
 
-// ✅ ROOT ROUTE (optional, but good)
+// ✅ ROOT ROUTE
 app.get("/", (req, res) => {
   res.send("Quiz Backend is running 🚀");
 });
 
-// ✅ THIS IS THE MISSING PART 👇👇👇
+// ✅ GET all questions
 app.get("/questions", async (req, res) => {
   try {
     const questions = await Question.find();
-    res.json(questions);
+    res.status(200).json(questions);
   } catch (error) {
-    res.status(500).json({ message: "Server error" });
+    res.status(500).json({ message: "Failed to fetch questions" });
+  }
+});
+
+// ✅ ADD question (THIS WAS MISSING)
+app.post("/questions", async (req, res) => {
+  try {
+    const { questionText, answers } = req.body;
+
+    // 🔍 Basic validation
+    if (!questionText || !answers || answers.length === 0) {
+      return res.status(400).json({
+        message: "Question and answers are required",
+      });
+    }
+
+    const question = new Question({
+      questionText,
+      answers,
+    });
+
+    await question.save();
+
+    res.status(201).json({
+      message: "Question added successfully ✅",
+    });
+  } catch (error) {
+    console.error("Save error:", error);
+    res.status(500).json({
+      message: "Failed to add question",
+    });
   }
 });
 

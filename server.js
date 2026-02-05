@@ -46,28 +46,6 @@ app.get("/questions", async (req, res) => {
   }
 });
 
-// ✅ ADD question (THIS WAS MISSING)
-app.post("/questions", authMiddleware, async (req, res) => {
-  try {
-    const { questionText, answers } = req.body;
-
-    if (!questionText || !Array.isArray(answers) || answers.length === 0) {
-      return res.status(400).json({
-        message: "Question and answers are required",
-      });
-    }
-
-    // 🔍 Validate each answer
-    for (const ans of answers) {
-      if (
-        typeof ans.text !== "string" ||
-        typeof ans.score !== "number"
-      ) {
-        return res.status(400).json({
-          message: "Each answer must have text (string) and score (number)",
-        });
-      }
-    }
 
     const question = new Question({
       questionText,
@@ -153,6 +131,28 @@ const authMiddleware = (req, res, next) => {
     res.status(401).json({ message: "Invalid token" });
   }
 };
+// ✅ ADD question (THIS WAS MISSING)
+app.post("/questions", authMiddleware, async (req, res) => {
+  try {
+    const { questionText, answers } = req.body;
+
+    if (!questionText || !Array.isArray(answers) || answers.length === 0) {
+      return res.status(400).json({
+        message: "Question and answers are required",
+      });
+    }
+
+    // 🔍 Validate each answer
+    for (const ans of answers) {
+      if (
+        typeof ans.text !== "string" ||
+        typeof ans.score !== "number"
+      ) {
+        return res.status(400).json({
+          message: "Each answer must have text (string) and score (number)",
+        });
+      }
+    }
 
 
 // 🔊 PORT (Render requires this)

@@ -2,18 +2,20 @@ const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
 
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+
+const User = require("./models/User");
+
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
-const User = require("./models/User");
-
 // 🔗 MongoDB connection
-mongoose.connect(process.env.MONGO_URI)
+mongoose
+  .connect(process.env.MONGO_URI)
   .then(() => console.log("✅ MongoDB connected"))
-  .catch(err => console.error("❌ MongoDB error:", err));
+  .catch((err) => console.error("❌ MongoDB error:", err));
 
 // 🧠 Question schema
 const questionSchema = new mongoose.Schema({
@@ -46,28 +48,16 @@ app.get("/questions", async (req, res) => {
   }
 });
 
+// ===================== AUTH =====================
 
-    const question = new Question({
-      questionText,
-      answers,
-    });
-
-    await question.save();
-
-    res.status(201).json({
-      message: "Question added successfully ✅",
-    });
-  } catch (error) {
-    console.error("Save error:", error);
-    res.status(500).json({
-      message: "Failed to add question",
-    });
-  }
-});
-
+// ✅ Register
 app.post("/register", async (req, res) => {
   try {
     const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ message: "Email and password required" });
+    }
 
     const existingUser = await User.findOne({ email });
     if (existingUser) {
@@ -85,13 +75,19 @@ app.post("/register", async (req, res) => {
 
     res.status(201).json({ message: "User registered successfully ✅" });
   } catch (error) {
+    console.error("REGISTER ERROR:", error);
     res.status(500).json({ message: "Registration failed" });
   }
 });
 
+// ✅ Login
 app.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ message: "Email and password required" });
+    }
 
     const user = await User.findOne({ email });
     if (!user) {
@@ -103,35 +99,41 @@ app.post("/login", async (req, res) => {
       return res.status(400).json({ message: "Invalid password" });
     }
 
-    const token = jwt.sign(
-      { userId: user._id },
-      process.env.JWT_SECRET,
-      { expiresIn: "7d" }
-    );
+    const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, {
+      expiresIn: "7d",
+    });
 
     res.status(200).json({
       message: "Login successful ✅",
-      token: token,
+      token,
     });
   } catch (error) {
+    console.error("LOGIN ERROR:", error);
     res.status(500).json({ message: "Login failed" });
   }
 });
 
+// ===================== AUTH MIDDLEWARE =====================
+
 const authMiddleware = (req, res, next) => {
   const token = req.header("Authorization");
 
-  if (!token) return res.status(401).json({ message: "No token provided" });
+  if (!token) {
+    return res.status(401).json({ message: "No token provided" });
+  }
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.user = decoded;
     next();
   } catch (error) {
-    res.status(401).json({ message: "Invalid token" });
+    return res.status(401).json({ message: "Invalid token" });
   }
 };
-// ✅ ADD question (THIS WAS MISSING)
+
+// ===================== PROTECTED ROUTE =====================
+
+// ✅ ADD question (Protected)
 app.post("/questions", authMiddleware, async (req, res) => {
   try {
     const { questionText, answers } = req.body;
@@ -142,20 +144,33 @@ app.post("/questions", authMiddleware, async (req, res) => {
       });
     }
 
-    // 🔍 Validate each answer
     for (const ans of answers) {
-      if (
-        typeof ans.text !== "string" ||
-        typeof ans.score !== "number"
-      ) {
+      if (typeof ans.text !== "string" || typeof ans.score !== "number") {
         return res.status(400).json({
           message: "Each answer must have text (string) and score (number)",
         });
       }
     }
 
+    const question = new Question({
+      questionText,
+      answers,
+    });
 
-// 🔊 PORT (Render requires this)
+    await question.save();
+
+    res.status(201).json({
+      message: "Question added successfully ✅",
+    });
+  } catch (error) {
+    console.error("SAVE QUESTION ERROR:", error);
+    res.status(500).json({
+      message: "Failed to add question",
+    });
+  }
+});
+
+// 🔊 PORT
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);

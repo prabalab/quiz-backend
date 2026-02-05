@@ -47,7 +47,7 @@ app.get("/questions", async (req, res) => {
 });
 
 // ✅ ADD question (THIS WAS MISSING)
-app.post("/questions", async (req, res) => {
+app.post("/questions", authMiddleware, async (req, res) => {
   try {
     const { questionText, answers } = req.body;
 
@@ -139,6 +139,20 @@ app.post("/login", async (req, res) => {
     res.status(500).json({ message: "Login failed" });
   }
 });
+
+const authMiddleware = (req, res, next) => {
+  const token = req.header("Authorization");
+
+  if (!token) return res.status(401).json({ message: "No token provided" });
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (error) {
+    res.status(401).json({ message: "Invalid token" });
+  }
+};
 
 
 // 🔊 PORT (Render requires this)

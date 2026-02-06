@@ -1,6 +1,7 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
+const nodemailer = require("nodemailer");
 
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
@@ -31,6 +32,24 @@ const questionSchema = new mongoose.Schema({
   ],
 });
 
+const sendOTP = async (email, otp) => {
+  const transporter = nodemailer.createTransport({
+    service: "gmail",
+    auth: {
+      user: process.env.GMAIL_USER,
+      pass: process.env.GMAIL_PASS,
+    },
+  });
+
+  await transporter.sendMail({
+    from: process.env.GMAIL_USER,
+    to: email,
+    subject: "Your Quiz App OTP Verification",
+    text: `Your OTP is: ${otp}. It will expire in 5 minutes.`,
+  });
+};
+
+
 const Question = mongoose.model("Question", questionSchema);
 
 // ✅ ROOT ROUTE
@@ -55,30 +74,68 @@ app.post("/register", async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    if (!email || !password) {
-      return res.status(400).json({ message: "Email and password required" });
-    }
+    if (!email || !password)
+      return res.status(400).json({ message: "Email & password required" });
 
     const existingUser = await User.findOne({ email });
     if (existingUser) {
       return res.status(400).json({ message: "User already exists" });
     }
 
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const user = new User({
       email,
       password: hashedPassword,
+      otp,
+      otpExpires: new Date(Date.now() + 5 * 60 * 1000), // 5 min
+      isVerified: false,
     });
 
     await user.save();
 
-    res.status(201).json({ message: "User registered successfully ✅" });
+    await sendOTP(email, otp);
+
+    res.status(201).json({
+      message: "OTP sent to email ✅",
+    });
   } catch (error) {
-    console.error("REGISTER ERROR:", error);
+    console.log("REGISTER ERROR:", error);
     res.status(500).json({ message: "Registration failed" });
   }
 });
+//otp verification 
+app.post("/verify-otp", async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+
+    const user = await User.findOne({ email });
+
+    if (!user) return res.status(400).json({ message: "User not found" });
+
+    if (user.isVerified)
+      return res.status(400).json({ message: "Already verified" });
+
+    if (user.otp !== otp)
+      return res.status(400).json({ message: "Invalid OTP" });
+
+    if (user.otpExpires < new Date())
+      return res.status(400).json({ message: "OTP expired" });
+
+    user.isVerified = true;
+    user.otp = null;
+    user.otpExpires = null;
+
+    await user.save();
+
+    res.status(200).json({ message: "Email verified successfully ✅" });
+  } catch (error) {
+    res.status(500).json({ message: "OTP verification failed" });
+  }
+});
+
 
 // ✅ Login
 app.post("/login", async (req, res) => {
@@ -102,7 +159,9 @@ app.post("/login", async (req, res) => {
     const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, {
       expiresIn: "7d",
     });
-
+  if (!user.isVerified) {
+  return res.status(400).json({ message: "Email not verified ❌" });
+}
     res.status(200).json({
       message: "Login successful ✅",
       token,
@@ -111,6 +170,7 @@ app.post("/login", async (req, res) => {
     console.error("LOGIN ERROR:", error);
     res.status(500).json({ message: "Login failed" });
   }
+
 });
 
 // ===================== AUTH MIDDLEWARE =====================

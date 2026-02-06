@@ -1,115 +1,170 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
-const nodemailer = require("nodemailer");
 
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 
-const User = require("./models/User");
+const { Resend } = require("resend");
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 🔗 MongoDB connection
+// =======================
+// ENV CHECK
+// =======================
+if (!process.env.MONGO_URI) console.log("❌ MONGO_URI missing");
+if (!process.env.JWT_SECRET) console.log("❌ JWT_SECRET missing");
+if (!process.env.RESEND_API_KEY) console.log("❌ RESEND_API_KEY missing");
+
+// =======================
+// MongoDB
+// =======================
 mongoose
   .connect(process.env.MONGO_URI)
   .then(() => console.log("✅ MongoDB connected"))
   .catch((err) => console.error("❌ MongoDB error:", err));
 
-// 🧠 Question schema
-const questionSchema = new mongoose.Schema({
-  questionText: {
-    type: String,
-    required: true,
+// =======================
+// Models
+// =======================
+const userSchema = new mongoose.Schema(
+  {
+    email: { type: String, required: true, unique: true },
+    password: { type: String, required: true },
+
+    otp: { type: String },
+    otpExpires: { type: Date },
+    isVerified: { type: Boolean, default: false },
   },
-  answers: [
-    {
-      text: { type: String, required: true },
-      score: { type: Number, required: true },
-    },
-  ],
-});
+  { timestamps: true }
+);
 
-const sendOTP = async (email, otp) => {
-  const transporter = nodemailer.createTransport({
-    service: "gmail",
-    auth: {
-      user: process.env.GMAIL_USER,
-      pass: process.env.GMAIL_PASS,
-    },
-  });
+const User = mongoose.model("User", userSchema);
 
-  await transporter.sendMail({
-    from: process.env.GMAIL_USER,
-    to: email,
-    subject: "Your Quiz App OTP Verification",
-    text: `Your OTP is: ${otp}. It will expire in 5 minutes.`,
-  });
-};
-
+const questionSchema = new mongoose.Schema(
+  {
+    questionText: { type: String, required: true },
+    answers: [
+      {
+        text: { type: String, required: true },
+        score: { type: Number, required: true },
+      },
+    ],
+  },
+  { timestamps: true }
+);
 
 const Question = mongoose.model("Question", questionSchema);
 
-// ✅ ROOT ROUTE
-app.get("/", (req, res) => {
-  res.send("Quiz Backend is running 🚀");
-});
+// =======================
+// Resend Setup
+// =======================
+const resend = new Resend(process.env.RESEND_API_KEY);
 
-// ✅ GET all questions
-app.get("/questions", async (req, res) => {
+const sendOTPEmail = async (email, otp) => {
+  await resend.emails.send({
+    from: "Quiz App <onboarding@resend.dev>",
+    to: email,
+    subject: "Your Quiz App OTP Code",
+    html: `
+      <h2>Your OTP is: <b>${otp}</b></h2>
+      <p>This OTP is valid for <b>10 minutes</b>.</p>
+    `,
+  });
+};
+
+// =======================
+// Helpers
+// =======================
+const generateOTP = () => crypto.randomInt(100000, 999999).toString();
+
+// =======================
+// Middleware
+// =======================
+const authMiddleware = (req, res, next) => {
+  const token = req.header("Authorization");
+
+  if (!token) return res.status(401).json({ message: "No token provided" });
+
   try {
-    const questions = await Question.find();
-    res.status(200).json(questions);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded;
+    next();
   } catch (error) {
-    res.status(500).json({ message: "Failed to fetch questions" });
+    return res.status(401).json({ message: "Invalid token" });
   }
+};
+
+// =======================
+// Routes
+// =======================
+
+// Root
+app.get("/", (req, res) => {
+  res.send("Quiz Backend with Resend OTP is running 🚀");
 });
 
-// ===================== AUTH =====================
-
-// ✅ Register
+// -----------------------
+// Register (Send OTP)
+// -----------------------
 app.post("/register", async (req, res) => {
   try {
     const { email, password } = req.body;
 
     if (!email || !password)
-      return res.status(400).json({ message: "Email & password required" });
+      return res.status(400).json({ message: "Email and password required" });
 
     const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return res.status(400).json({ message: "User already exists" });
+
+    // Already verified
+    if (existingUser && existingUser.isVerified) {
+      return res.status(400).json({ message: "Email already registered" });
     }
 
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-
+    const otp = generateOTP();
+    const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const user = new User({
-      email,
-      password: hashedPassword,
-      otp,
-      otpExpires: new Date(Date.now() + 5 * 60 * 1000), // 5 min
-      isVerified: false,
-    });
+    // Existing but not verified -> update OTP
+    if (existingUser && !existingUser.isVerified) {
+      existingUser.password = hashedPassword;
+      existingUser.otp = otp;
+      existingUser.otpExpires = otpExpires;
+      await existingUser.save();
+    } else {
+      // New user
+      const newUser = new User({
+        email,
+        password: hashedPassword,
+        otp,
+        otpExpires,
+        isVerified: false,
+      });
+      await newUser.save();
+    }
 
-    await user.save();
+    // Send OTP using Resend
+    await sendOTPEmail(email, otp);
 
-    await sendOTP(email, otp);
-
-    res.status(201).json({
-      message: "OTP sent to email ✅",
-    });
+    res.status(201).json({ message: "OTP sent to email ✅" });
   } catch (error) {
     console.log("REGISTER ERROR:", error);
-    res.status(500).json({ message: "Registration failed" });
+    res.status(500).json({ message: "Registration failed", error });
   }
 });
-//otp verification 
+
+// -----------------------
+// Verify OTP
+// -----------------------
 app.post("/verify-otp", async (req, res) => {
   try {
     const { email, otp } = req.body;
+
+    if (!email || !otp)
+      return res.status(400).json({ message: "Email and OTP required" });
 
     const user = await User.findOne({ email });
 
@@ -132,106 +187,117 @@ app.post("/verify-otp", async (req, res) => {
 
     res.status(200).json({ message: "Email verified successfully ✅" });
   } catch (error) {
+    console.log("VERIFY OTP ERROR:", error);
     res.status(500).json({ message: "OTP verification failed" });
   }
 });
 
+// -----------------------
+// Resend OTP
+// -----------------------
+app.post("/resend-otp", async (req, res) => {
+  try {
+    const { email } = req.body;
 
-// ✅ Login
+    if (!email) return res.status(400).json({ message: "Email required" });
+
+    const user = await User.findOne({ email });
+
+    if (!user) return res.status(400).json({ message: "User not found" });
+
+    if (user.isVerified)
+      return res.status(400).json({ message: "Already verified" });
+
+    const otp = generateOTP();
+
+    user.otp = otp;
+    user.otpExpires = new Date(Date.now() + 10 * 60 * 1000);
+    await user.save();
+
+    await sendOTPEmail(email, otp);
+
+    res.status(200).json({ message: "New OTP sent ✅" });
+  } catch (error) {
+    console.log("RESEND OTP ERROR:", error);
+    res.status(500).json({ message: "Resend OTP failed" });
+  }
+});
+
+// -----------------------
+// Login
+// -----------------------
 app.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    if (!email || !password) {
+    if (!email || !password)
       return res.status(400).json({ message: "Email and password required" });
-    }
 
     const user = await User.findOne({ email });
-    if (!user) {
-      return res.status(400).json({ message: "Invalid email" });
+
+    if (!user) return res.status(400).json({ message: "User not found" });
+
+    if (!user.isVerified) {
+      return res.status(400).json({ message: "Email not verified ❌" });
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-      return res.status(400).json({ message: "Invalid password" });
-    }
+
+    if (!isMatch) return res.status(400).json({ message: "Invalid password" });
 
     const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, {
       expiresIn: "7d",
     });
-  if (!user.isVerified) {
-  return res.status(400).json({ message: "Email not verified ❌" });
-}
+
     res.status(200).json({
       message: "Login successful ✅",
       token,
     });
   } catch (error) {
-    console.error("LOGIN ERROR:", error);
+    console.log("LOGIN ERROR:", error);
     res.status(500).json({ message: "Login failed" });
   }
-
 });
 
-// ===================== AUTH MIDDLEWARE =====================
-
-const authMiddleware = (req, res, next) => {
-  const token = req.header("Authorization");
-
-  if (!token) {
-    return res.status(401).json({ message: "No token provided" });
-  }
-
+// -----------------------
+// Questions
+// -----------------------
+app.get("/questions", async (req, res) => {
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded;
-    next();
+    const questions = await Question.find();
+    res.status(200).json(questions);
   } catch (error) {
-    return res.status(401).json({ message: "Invalid token" });
+    res.status(500).json({ message: "Failed to fetch questions" });
   }
-};
+});
 
-// ===================== PROTECTED ROUTE =====================
-
-// ✅ ADD question (Protected)
 app.post("/questions", authMiddleware, async (req, res) => {
   try {
     const { questionText, answers } = req.body;
 
     if (!questionText || !Array.isArray(answers) || answers.length === 0) {
-      return res.status(400).json({
-        message: "Question and answers are required",
-      });
+      return res.status(400).json({ message: "Invalid question data" });
     }
 
     for (const ans of answers) {
-      if (typeof ans.text !== "string" || typeof ans.score !== "number") {
+      if (!ans.text || typeof ans.score !== "number") {
         return res.status(400).json({
-          message: "Each answer must have text (string) and score (number)",
+          message: "Each answer must have text and score",
         });
       }
     }
 
-    const question = new Question({
-      questionText,
-      answers,
-    });
-
+    const question = new Question({ questionText, answers });
     await question.save();
 
-    res.status(201).json({
-      message: "Question added successfully ✅",
-    });
+    res.status(201).json({ message: "Question added successfully ✅" });
   } catch (error) {
-    console.error("SAVE QUESTION ERROR:", error);
-    res.status(500).json({
-      message: "Failed to add question",
-    });
+    res.status(500).json({ message: "Failed to add question" });
   }
 });
 
-// 🔊 PORT
+// =======================
+// PORT
+// =======================
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log("Server running on port " + PORT));
